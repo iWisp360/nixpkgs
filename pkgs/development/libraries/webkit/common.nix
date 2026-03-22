@@ -1,22 +1,19 @@
 {
   lib,
   clangStdenv,
-  fetchurl,
   perl,
   python3,
   ruby,
-  gi-docgen,
   bison,
   gperf,
   cmake,
   ninja,
   pkg-config,
   gettext,
-  gobject-introspection,
   gnutls,
   libgcrypt,
   libgpg-error,
-  gtk4,
+  gtk4 ? null,
   wayland,
   wayland-protocols,
   wayland-scanner,
@@ -34,7 +31,7 @@
   libsoup_3,
   libsecret,
   libxslt,
-  harfbuzz,
+  harfbuzzFull,
   hyphen,
   icu,
   libsysprof-capture,
@@ -76,17 +73,33 @@
   systemdSupport ? lib.meta.availableOn clangStdenv.hostPlatform systemdLibs,
   testers,
   fetchpatch,
+  port,
+  meta,
+  abiVersion ? "6.0",
+  version,
+  src,
+  extraBuildInputs ? [ ],
+  extraPropagatedBuildInputs ? [ ],
+  extraNativeBuildInputs ? [ ],
+  ...
 }:
 
+assert lib.assertOneOf "port" port [
+  "gtk"
+  "wpe"
+];
+
 let
-  abiVersion = if lib.versionAtLeast gtk4.version "4.0" then "6.0" else "4.1";
+  gtkPort = port == "gtk";
+  wpePort = port == "wpe";
+  finalName = if gtkPort then "webkitgtk" else "wpewebkit";
 in
 
 # https://webkitgtk.org/2024/10/04/webkitgtk-2.46.html recommends building with clang.
 clangStdenv.mkDerivation (finalAttrs: {
-  pname = "webkitgtk";
-  version = "2.50.6";
-  name = "webkitgtk-${finalAttrs.version}+abi=${abiVersion}";
+  pname = finalName;
+  inherit version;
+  name = "${finalName}-${finalAttrs.version}${if gtkPort then "+abi=${abiVersion}" else ""}";
 
   outputs = [
     "out"
@@ -98,10 +111,7 @@ clangStdenv.mkDerivation (finalAttrs: {
   # Can't be linked within a 4GB address space.
   separateDebugInfo = clangStdenv.hostPlatform.isLinux && !clangStdenv.hostPlatform.is32bit;
 
-  src = fetchurl {
-    url = "https://webkitgtk.org/releases/webkitgtk-${finalAttrs.version}.tar.xz";
-    hash = "sha256-Kygav4iU/8YXIVLlZgt17u7b4cxD1ng9Cdx598hlu0I=";
-  };
+  inherit src;
 
   patches = lib.optionals clangStdenv.hostPlatform.isLinux [
     (replaceVars ./fix-bubblewrap-paths.patch {
@@ -123,7 +133,6 @@ clangStdenv.mkDerivation (finalAttrs: {
     bison
     cmake
     gettext
-    gobject-introspection
     gperf
     ninja
     perl
@@ -131,13 +140,13 @@ clangStdenv.mkDerivation (finalAttrs: {
     pkg-config
     python3
     ruby
-    gi-docgen
     glib # for gdbus-codegen
     unifdef
   ]
   ++ lib.optionals clangStdenv.hostPlatform.isLinux [
     wayland-scanner
-  ];
+  ]
+  ++ extraNativeBuildInputs;
 
   buildInputs = [
     at-spi2-core
@@ -151,7 +160,7 @@ clangStdenv.mkDerivation (finalAttrs: {
     gnutls
     gst-plugins-bad
     gst-plugins-base
-    harfbuzz
+    harfbuzzFull
     hyphen
     icu
     libGL
@@ -205,22 +214,23 @@ clangStdenv.mkDerivation (finalAttrs: {
   ++ lib.optionals withLibsecret [
     libsecret
   ]
-  ++ lib.optionals (lib.versionAtLeast gtk4.version "4.0") [
+  ++ lib.optionals (wpePort || (gtkPort && lib.versionAtLeast gtk4.version "4.0")) [
     wayland-protocols
-  ];
+  ]
+  ++ extraBuildInputs;
 
   propagatedBuildInputs = [
-    gtk4
     libsoup_3
-  ];
+  ]
+  ++ extraPropagatedBuildInputs;
 
   cmakeFlags =
     let
       cmakeBool = x: if x then "ON" else "OFF";
     in
     [
-      "-DENABLE_INTROSPECTION=ON"
-      "-DPORT=GTK"
+      "-DENABLE_INTROSPECTION=${cmakeBool gtkPort}"
+      "-DPORT=${lib.toUpper port}"
       "-DUSE_SOUP2=${cmakeBool false}"
       "-DUSE_LIBSECRET=${cmakeBool withLibsecret}"
       "-DENABLE_EXPERIMENTAL_FEATURES=${cmakeBool enableExperimental}"
@@ -240,8 +250,11 @@ clangStdenv.mkDerivation (finalAttrs: {
       "-DUSE_APPLE_ICU=OFF"
       "-DUSE_OPENGL_OR_ES=OFF"
     ]
-    ++ lib.optionals (lib.versionOlder gtk4.version "4.0") [
+    ++ lib.optionals (wpePort || (gtkPort && lib.versionOlder gtk4.version "4.0")) [
       "-DUSE_GTK4=OFF"
+    ]
+    ++ lib.optionals wpePort [
+      "-DENABLE_GTKDOC=OFF"
     ]
     ++ lib.optionals (!systemdSupport) [
       "-DENABLE_JOURNALD_LOG=OFF"
@@ -260,26 +273,5 @@ clangStdenv.mkDerivation (finalAttrs: {
 
   passthru.tests.pkg-config = testers.testMetaPkgConfig finalAttrs.finalPackage;
 
-  meta = {
-    description = "Web content rendering engine, GTK port";
-    mainProgram = "WebKitWebDriver";
-    homepage = "https://webkitgtk.org/";
-    license = lib.licenses.bsd2;
-    pkgConfigModules =
-      if lib.versionAtLeast abiVersion "6.0" then
-        [
-          "javascriptcoregtk-${abiVersion}"
-          "webkitgtk-${abiVersion}"
-          "webkitgtk-web-process-extension-${abiVersion}"
-        ]
-      else
-        [
-          "javascriptcoregtk-${abiVersion}"
-          "webkit2gtk-${abiVersion}"
-          "webkit2gtk-web-extension-${abiVersion}"
-        ];
-    platforms = lib.platforms.linux ++ lib.platforms.darwin;
-    teams = [ lib.teams.gnome ];
-    broken = clangStdenv.hostPlatform.isDarwin;
-  };
+  inherit meta;
 })

@@ -7609,13 +7609,16 @@ with pkgs;
     graphviz = graphviz-nox;
   };
 
-  webkitgtk_6_0 = callPackage ../development/libraries/webkitgtk {
-    harfbuzz = harfbuzzFull;
+  webkitgtk_6_0 = callPackage ../development/libraries/webkit/webkitgtk.nix {
     inherit (gst_all_1) gst-plugins-base gst-plugins-bad;
   };
 
   webkitgtk_4_1 = webkitgtk_6_0.override {
     gtk4 = gtk3;
+  };
+
+  wpewebkit = callPackage ../development/libraries/webkit/wpewebkit.nix {
+    inherit (gst_all_1) gst-plugins-base gst-plugins-bad;
   };
 
   wlr-protocols = callPackage ../development/libraries/wlroots/protocols.nix { };
